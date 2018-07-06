@@ -8,6 +8,7 @@ import android.util.Log;
 import android.view.View;
 import android.widget.TextView;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 
 import gridmark.jp.co.gpenbluelibrary.GPenBlueLib;
@@ -23,7 +24,7 @@ public class MainActivity extends AppCompatActivity implements GPenBlueListener{
     final private String CHARACTERISTIC_UUID = "0783b03e-8535-b5a0-7140-a304d2495cb8";  // キャラスタリクティックUUID
 
     // GPenBlue１本１本異なる値（この値は適宜変更すること）
-    final private String DEVICE_ADDRESS = "DD:11:05:09:01:8E";  // デバイスのアドレス
+    final private String DEVICE_ADDRESS = "DD:11:03:1B:00:18";//"DD:11:05:09:01:8E";  // デバイスのアドレス
 
     // 変数保存キー
     final private static String SAVE_TEXT_INFO = "SAVE_TEXT_INFO";
@@ -82,13 +83,6 @@ public class MainActivity extends AppCompatActivity implements GPenBlueListener{
     }
 
     @Override
-    protected void onPause() {
-        super.onPause();
-
-        mGPenBlueLib.FromOnPause();
-    }
-
-    @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
 
@@ -142,7 +136,7 @@ public class MainActivity extends AppCompatActivity implements GPenBlueListener{
     }
 
     // GPenBlueが発信するバイトデータを受け取るイベント
-    public void RecieveGpenData(byte[] data){
+    public void RecieveGpenData(byte[] data, String address){
         // 受信データ解析
         if(data != null) {
             // 変数初期化
@@ -169,6 +163,7 @@ public class MainActivity extends AppCompatActivity implements GPenBlueListener{
                             }
                             dotcode = ((data[3] & 0xFF) << (8 * 3)) + ((data[4] & 0xFF) << (8 * 2)) + ((data[5] & 0xFF) << (8 * 1)) + ((data[6] & 0xFF) << (8 * 0));
                             output.append("dotcode = " + dotcode);
+                            output.append(", address = " + address);
                             SetText(output.toString(), 1);
                             // 前回取得したドットコードと異なる
                             if (!mCommon.ByteIndex(data[2], 4))
@@ -179,14 +174,11 @@ public class MainActivity extends AppCompatActivity implements GPenBlueListener{
                             // Activeコード取得(data:3)
                             dotcode = data[3] & 0xFF;
                             output.append("dotcode = " + dotcode);
-                            // 座標値（整数部分）(data:4,5)
-                            xy.set(data[4] & 0xFF, data[5] & 0xFF);
-                            // 座標値（小数部分）(data:6)
-                            int xf = ((data[6] >> 4) & 0x0F) & 0xFF;
-                            int yf = (data[6] & 0x0F) & 0xFF;
-                            // 座標値（整数部分と小数部分を合成）
-                            xy.set((xy.x << 4) + xf, (xy.y << 4) + yf);
-                            output.append(", (x, y) = (" + xy.x + ", " + xy.y + ")");
+                            // 座標値取得(data:4,5,6)
+                            CalculationXY calc = new CalculationXY();
+                            calc = calc.calcMethod(data[4], data[5], data[6]);
+                            output.append(", (x, y) = (" + calc.x + ", " + calc.y + ")");
+                            output.append(", address = " + address);
                             SetText(output.toString(), 1);
                         }
                     }
@@ -199,14 +191,11 @@ public class MainActivity extends AppCompatActivity implements GPenBlueListener{
             else if(data.length == 4){
                 // XYコード(短縮版)
                 if((data[0] & 0xFF) == 0xFF) {
-                    // 座標値（整数部分）(data:1,2)
-                    xy.set(data[1] & 0xFF, data[2] & 0xFF);
-                    // 座標値（小数部分）(data:3)
-                    int xf = ((data[3] >> 4) & 0x0F) & 0xFF;
-                    int yf = (data[3] & 0x0F) & 0xFF;
-                    // 座標値（整数部分と小数部分を合成）
-                    xy.set((xy.x << 4) + xf, (xy.y << 4) + yf);
-                    output.append("(x, y) = (" + xy.x + ", " + xy.y + ")");
+                    // 座標値取得(data:4,5,6)
+                    CalculationXY tempCalc = new CalculationXY();
+                    CalculationXY calc = tempCalc.calcMethod(data[1], data[2], data[3]);
+                    output.append(", (x, y) = (" + calc.x + ", " + calc.y + ")");
+                    output.append(", address = " + address);
                     SetText(output.toString(), 1);
                 }
             }
@@ -276,5 +265,42 @@ public class MainActivity extends AppCompatActivity implements GPenBlueListener{
         }else if(dotcode == 2){
             // ex)画像Bを表示する
         }
+    }
+}
+
+// BTペンから取得したXY値（byte型）を数値（double型）に変換する
+class CalculationXY{
+    // XY座標産出用係数
+    final private BigDecimal COEFFICIENT_COORDINATE_VALUE_X = new BigDecimal("2.048");
+    final private BigDecimal COEFFICIENT_COORDINATE_VALUE_Y = new BigDecimal("0.128");
+    // 変数
+    public double x;   // 戻り値
+    public double y;   // 戻り値
+    public CalculationXY calcMethod(byte x8bit, byte y8bit, byte decimal8bit){
+        CalculationXY calc = new CalculationXY();
+        // 座標値取得（整数部分）
+        Point xy = new Point(-1, -1);
+        xy.set(x8bit & 0xFF, y8bit & 0xFF);
+        // 座標値取得（小数部分）
+        short upper4bit = (short)decimal8bit;   // 上位４ビット
+        upper4bit &= 0xFF;
+        upper4bit >>= 4;
+        short lower4bit = (short)decimal8bit;   // 下位４ビット
+        lower4bit &= 0x0F;
+        // X座標値を算出 = (X座標整数値 * 2.048) + (X座標小数値 * 0.128)
+        BigDecimal bdTemp = new BigDecimal(String.format("%d", xy.x));
+        BigDecimal bdX = bdTemp.multiply(COEFFICIENT_COORDINATE_VALUE_X);   // = X整数値 * 2.048
+        bdTemp = new BigDecimal(String.format("%d", upper4bit));
+        bdTemp = bdTemp.multiply(COEFFICIENT_COORDINATE_VALUE_Y);   // = X小数値 * 0.128
+        bdX = bdX.add(bdTemp);  // = (X整数値 * 2.048) + (X小数値 * 0.128)
+        calc.x = bdX.doubleValue();
+        // Y座標を算出 = 〃
+        bdTemp = new BigDecimal(String.format("%d", xy.y));
+        BigDecimal bdY = bdTemp.multiply(COEFFICIENT_COORDINATE_VALUE_X);   // = Y整数値 * 2.048
+        bdTemp = new BigDecimal(String.format("%d", lower4bit));
+        bdTemp = bdTemp.multiply(COEFFICIENT_COORDINATE_VALUE_Y);   // = Y小数値 * 0.128
+        bdY = bdY.add(bdTemp);  // = (Y整数値 * 2.048) + (Y小数値 * 0.128)
+        calc.y = bdY.doubleValue();
+        return calc;
     }
 }
